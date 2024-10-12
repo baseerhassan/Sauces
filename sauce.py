@@ -150,18 +150,36 @@ def get_table_name(file_name, sheet_name):
 
 table_name = 'null'
 
+def makeProcessedFolder(foldername):
+    current_datetime = datetime.now().strftime('%Y-%m-%d_%H-')
+    processed_folder = f'C:\\log\\Processed_{current_datetime}_{foldername}'
+    #print('Making Folder' + processed_folder )
+    if not os.path.exists(processed_folder):
+        os.makedirs(processed_folder,exist_ok=False)
+    return processed_folder
+
+
+
+processed_files_log = set()
+
+def setProcessedFile():
+    processed_files_log = set()
+# Before processing, load already processed files from a log table (or file)
+    cursor.execute("SELECT File_Name FROM ProcessedFilesLog")
+    for row in cursor.fetchall():
+        processed_files_log.add(row[0])
+
+
+
 # Process each file based on folder and type from SQL
 for source_folder, file_type in get_source_folders():
     print(f"Outer Loop in folder: {source_folder} of type: {file_type}")
 
     # Step 2: Create processed folder with timestamp
-    current_datetime = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    processed_folder = f'C:\\Users\\Administrator\\Downloads\\Processed_{current_datetime}'
-
     # Step 3: Traverse through all subfolders and files in the source folder
     for dirpath, _, filenames in os.walk(source_folder):
         for file_name in filenames:
-            if file_name.endswith('.xlsx'):  # Process only Excel files
+            if file_name.endswith('.xlsx') and file_name not in processed_files_log:  # Process only Excel files
                 print(f"Inner Loop file: {file_name}")
 
                 # Step 4: Full file path (including subfolders)
@@ -256,19 +274,23 @@ for source_folder, file_type in get_source_folders():
                             VALUES ({placeholders})
                         '''
 
-                        # Step 7: Insert data in chunks
-                        for chunk in chunk_df(df):
-                            batch_insert_to_sql(chunk, insert_query, table_name)
+                # Step 7: Insert data in chunks
+                    for chunk in chunk_df(df):
+                        batch_insert_to_sql(chunk, insert_query, table_name)
 
                 
-                    # Step 8: Move the processed file to the "Processed" folder
+                # Step 8: Move the processed file to the "Processed" folder
+                    processed_folder = makeProcessedFolder(table_name)
                     processed_subfolder = os.path.join(processed_folder, os.path.relpath(dirpath, source_folder))
                     if not os.path.exists(processed_subfolder):
                         os.makedirs(processed_subfolder)
 
-                #   shutil.move(file_path, os.path.join(processed_subfolder, file_name))
-                #   print(f"File '{file_name}' processed and moved to '{processed_subfolder}'.")
+                    shutil.move(file_path, os.path.join(processed_subfolder, file_name))
+                    print(f"File '{file_name}' processed and moved to '{processed_subfolder}'.")
 
+                    cursor.execute("INSERT INTO ProcessedFilesLog (File_Name, File_Path) VALUES (?,?)", (file_name,file_path))
+                    setProcessedFile()
+                    
                 except Exception as e:
                     print(f"Error processing file {file_name}: {str(e)}")
                     log_insertion_error(table_name, file_name, '0', str(e))
