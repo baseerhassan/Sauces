@@ -5,16 +5,16 @@ import shutil
 from datetime import datetime
 
 # Step 1: Define folder paths
-source_folder = 'C:\\Users\\Administrator\\Downloads\\List'
+#source_folder = 'C:\\Users\\Administrator\\Downloads\\List\\X\\Active'
 
-current_datetime = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-processed_folder = f'C:\\Users\\Administrator\\Downloads\\Processed_{current_datetime}'
+#current_datetime = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+#processed_folder = f'C:\\Users\\Administrator\\Downloads\\Processed_{current_datetime}'
 
 
 
 # Ensure the processed folder exists
-if not os.path.exists(processed_folder):
-    os.makedirs(processed_folder)
+#if not os.path.exists(processed_folder):
+#    os.makedirs(processed_folder)
 
 # Step 2: Define the connection to SQL Server (reuse the connection)
 conn = pyodbc.connect(
@@ -24,6 +24,12 @@ conn = pyodbc.connect(
     'Trusted_Connection=yes;'
 )
 cursor = conn.cursor()
+
+def get_source_folders():
+    query = "SELECT SourceFolderPath, Type FROM SourceFolders where IsActive = 1"
+    cursor.execute(query)
+    return cursor.fetchall()
+
 
 # Function to map pandas data types to SQL Server data types
 def map_dtype_to_sql(dtype):
@@ -109,16 +115,16 @@ def batch_insert_to_sql(df, insert_query, table_name):
 
 # Special keywords mapped to corresponding template tables
 keyword_to_template_table = {
-    'Probate': 'Sauce1Template',
-    'Tax': 'Sauce1Template',
-    'Eviction': 'Sauce1Template',
+    'Sauce3': 'Sauce3Template',
+    'Sauce1': 'Sauce1Template',
+    'Sauce2': 'Sauce2Template',
     # Add other mappings here if necessary
 }
 
 # Function to get the template table based on the file name
-def get_template_table_name(file_name):
+def get_template_table_name(file_type):
     for keyword, template_table in keyword_to_template_table.items():
-        if keyword.lower() in file_name.lower():
+        if keyword.lower() in file_type.lower():
             return template_table
     return None  # Return None if no keyword matches
 
@@ -142,119 +148,131 @@ def get_table_name(file_name, sheet_name):
     #print(f"No special keyword found. Default table name: {table_name}")
     return table_name
 
-# Step 3: Traverse through all subfolders and files in the source folder
-for dirpath, _, filenames in os.walk(source_folder):
-    for file_name in filenames:
-        if file_name.endswith('.xlsx'):  # Process only Excel files
-            print(f"Processing file: {file_name}")
+table_name = 'null'
 
-            # Step 4: Full file path (including subfolders)
-            file_path = os.path.join(dirpath, file_name)
+# Process each file based on folder and type from SQL
+for source_folder, file_type in get_source_folders():
+    print(f"Outer Loop in folder: {source_folder} of type: {file_type}")
 
-            # Step 5: Determine template table based on the file name
-            template_table_name = get_template_table_name(file_name)
-            if not template_table_name:
-                print(f"No matching keyword found in the file name '{file_name}'. Skipping file.")
-                continue
+    # Step 2: Create processed folder with timestamp
+    current_datetime = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    processed_folder = f'C:\\Users\\Administrator\\Downloads\\Processed_{current_datetime}'
 
-            #print(f"Using template table: {template_table_name}")
+    # Step 3: Traverse through all subfolders and files in the source folder
+    for dirpath, _, filenames in os.walk(source_folder):
+        for file_name in filenames:
+            if file_name.endswith('.xlsx'):  # Process only Excel files
+                print(f"Inner Loop file: {file_name}")
 
-            # Step 6: Get the columns from the identified template table
-            template_columns = get_template_columns(template_table_name)
-            
-            
-            # Step 7: Open and process the Excel file
-            try:
-                sheets_dict = pd.read_excel(file_path, sheet_name=None, engine='openpyxl')
-                for sheet_name, df in sheets_dict.items():
-                    #print(f"Processing sheet: {sheet_name}")
+                # Step 4: Full file path (including subfolders)
+                file_path = os.path.join(dirpath, file_name)
 
-                    # Generate table name based on file name and sheet name
-                    table_name = get_table_name(file_name, sheet_name)
-                    #print(table_name)
+                # Step 5: Determine template table based on the file name
+                template_table_name = get_template_table_name(file_type)
+                if not template_table_name:
+                    print(f"No matching keyword found in the file name '{file_name}'. Skipping file.")
+                    continue
 
-                    df.columns = [col.replace(' - ', ' ').replace(' ', '_').replace('$', '')
-                                  .replace('-', '_').replace('.', '').replace('#', 'No')
-                                  .replace('Use', 'Uses').replace('(', '').replace(')', '')
-                                  for col in df.columns]
-                    df = df.replace({float('nan'): None})  # Replace NaN values
+                #print(f"Using template table: {template_table_name}")
 
-                    # Skip empty sheets
-                    if df.empty:
-                        print(f"Sheet '{sheet_name}' is empty. Skipping.")
-                        continue
+                # Step 6: Get the columns from the identified template table
+                template_columns = get_template_columns(template_table_name)
+                
+                
+                # Step 7: Open and process the Excel file
+                try:
+                    sheets_dict = pd.read_excel(file_path, sheet_name=None, engine='openpyxl')
+                    for sheet_name, df in sheets_dict.items():
+                        #print(f"Processing sheet: {sheet_name}")
 
-                    # Capture current datetime for bulk insert
-                    bulk_insert_datetime = datetime.now()
+                        # Generate table name based on file name and sheet name
+                        table_name = file_type #get_table_name(file_name, sheet_name)
 
-                    # Add additional columns for metadata (File Name, Sheet Name, Insertion Datetime)
-                    df['File_Name'] = file_name
-                    df['Sheet_Name'] = sheet_name
-                    df['Bulk_Insert_DateTime'] = bulk_insert_datetime
-                    df['IsShifted'] = 0
 
-                    # Filter DataFrame to keep only columns that exist in the template table
-                    filtered_columns = [col for col in df.columns if col in template_columns]
-                    df = df[filtered_columns]
+                        #print(table_name)
 
-                    # Skip if no columns match the template table
-                    if df.empty:
-                        print(f"No matching columns in sheet '{sheet_name}'. Skipping.")
-                        continue
+                        df.columns = [col.replace(' - ', ' ').replace(' ', '_').replace('$', '')
+                                    .replace('-', '_').replace('.', '').replace('#', 'No')
+                                    .replace('Use', 'Uses').replace('(', '').replace(')', '')
+                                    for col in df.columns]
+                        df = df.replace({float('nan'): None})  # Replace NaN values
 
-                    # Step 6: Check if the table already exists
-                    if not table_exists(table_name):
-                        print(f"Creating new table: {table_name}")
+                        # Skip empty sheets
+                        if df.empty:
+                            print(f"Sheet '{sheet_name}' is empty. Skipping.")
+                            continue
 
-                        # Dynamically generate SQL table creation statement
-                        sql_columns = []
-                        for col in df.columns:
-                            sql_type = map_dtype_to_sql(df[col].dtype)
-                            sql_columns.append(f'[{col}] {sql_type}')
+                        # Capture current datetime for bulk insert
+                        bulk_insert_datetime = datetime.now()
 
-                        create_table_statement = f'''
-                        CREATE TABLE {table_name} (
-                            {', '.join(sql_columns)}
-                        );
+                        # Add additional columns for metadata (File Name, Sheet Name, Insertion Datetime)
+                        df['File_Name'] = file_name
+                        df['Sheet_Name'] = sheet_name
+                        df['Bulk_Insert_DateTime'] = bulk_insert_datetime
+                        df['IsShifted'] = 0
+
+                        # Filter DataFrame to keep only columns that exist in the template table
+                        filtered_columns = [col for col in df.columns if col in template_columns]
+                        df = df[filtered_columns]
+
+                        # Skip if no columns match the template table
+                        if df.empty:
+                            print(f"No matching columns in sheet '{sheet_name}'. Skipping.")
+                            continue
+
+                        # Step 6: Check if the table already exists
+                        if not table_exists(table_name):
+                            print(f"Creating new table: {table_name}")
+
+                            # Dynamically generate SQL table creation statement
+                            sql_columns = []
+                            for col in df.columns:
+                                sql_type = map_dtype_to_sql(df[col].dtype)
+                                sql_columns.append(f'[{col}] {sql_type}')
+
+                            create_table_statement = f'''
+                            CREATE TABLE {table_name} (
+                                {', '.join(sql_columns)}
+                            );
+                            '''
+                            cursor.execute(create_table_statement)
+                        else:
+                            # Get current columns in the SQL table
+                            existing_columns = get_current_columns(table_name)
+                            # Identify new columns in the DataFrame
+                            new_columns = set(df.columns) - existing_columns
+                            # Add new columns to the SQL table if they do not exist
+                            if new_columns:
+                                #print(f"NEW COLUMNS FOUND'{sheet_name}'")
+                                add_new_columns_to_table(table_name, new_columns)
+
+                        # Prepare SQL insert query
+
+                        placeholders = ', '.join('?' * len(df.columns))
+                        columns_str = ', '.join([f'[{col}]' for col in df.columns])
+
+                        insert_query = f'''
+                            INSERT INTO {table_name} ({columns_str})
+                            VALUES ({placeholders})
                         '''
-                        cursor.execute(create_table_statement)
-                    else:
-                        # Get current columns in the SQL table
-                        existing_columns = get_current_columns(table_name)
-                        # Identify new columns in the DataFrame
-                        new_columns = set(df.columns) - existing_columns
-                        # Add new columns to the SQL table if they do not exist
-                        if new_columns:
-                            #print(f"NEW COLUMNS FOUND'{sheet_name}'")
-                            add_new_columns_to_table(table_name, new_columns)
 
-                    # Prepare SQL insert query
+                        # Step 7: Insert data in chunks
+                        for chunk in chunk_df(df):
+                            batch_insert_to_sql(chunk, insert_query, table_name)
 
-                    placeholders = ', '.join('?' * len(df.columns))
-                    columns_str = ', '.join([f'[{col}]' for col in df.columns])
+                
+                    # Step 8: Move the processed file to the "Processed" folder
+                    processed_subfolder = os.path.join(processed_folder, os.path.relpath(dirpath, source_folder))
+                    if not os.path.exists(processed_subfolder):
+                        os.makedirs(processed_subfolder)
 
-                    insert_query = f'''
-                        INSERT INTO {table_name} ({columns_str})
-                        VALUES ({placeholders})
-                    '''
+                #   shutil.move(file_path, os.path.join(processed_subfolder, file_name))
+                #   print(f"File '{file_name}' processed and moved to '{processed_subfolder}'.")
 
-                    # Step 7: Insert data in chunks
-                    for chunk in chunk_df(df):
-                        batch_insert_to_sql(chunk, insert_query, table_name)
-
-            
-                # Step 8: Move the processed file to the "Processed" folder
-                processed_subfolder = os.path.join(processed_folder, os.path.relpath(dirpath, source_folder))
-                if not os.path.exists(processed_subfolder):
-                    os.makedirs(processed_subfolder)
-
-                shutil.move(file_path, os.path.join(processed_subfolder, file_name))
-                print(f"File '{file_name}' processed and moved to '{processed_subfolder}'.")
-
-            except Exception as e:
-                print(f"Error processing file {file_name}: {str(e)}")
-                log_insertion_error(table_name, file_name, '0', str(e))
-                continue
+                except Exception as e:
+                    print(f"Error processing file {file_name}: {str(e)}")
+                    log_insertion_error(table_name, file_name, '0', str(e))
+                    continue
 
         
 
